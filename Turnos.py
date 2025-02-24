@@ -4,7 +4,6 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 
-
 def connect_to_mariadb():
     # Configuração da página para layout amplo
     st.set_page_config(layout="wide")
@@ -63,7 +62,7 @@ def connect_to_mariadb():
             # 🔹 Query da view de monitoria (avulsa_mon)
             query_avulsa = """
             SELECT 
-                unidade, equipe_real, dt_monitoria, situacao, 
+                unidade, equipe_real, dt_inicio_serv, situacao, 
                 gravou_atividade, monitor, supervisor
             FROM 
                 view_power_bi_avulsa_mon
@@ -80,7 +79,7 @@ def connect_to_mariadb():
             df_turnos = pd.DataFrame(resultados_turnos, columns=colunas_turnos)
 
             colunas_avulsa = [
-                'unidade', 'equipe_real', 'dt_monitoria', 'situacao',
+                'unidade', 'equipe_real', 'dt_inicio_serv', 'situacao',
                 'gravou_atividade', 'monitor', 'supervisor'
             ]
             df_avulsa = pd.DataFrame(resultados_avulsa, columns=colunas_avulsa)
@@ -88,7 +87,11 @@ def connect_to_mariadb():
             # Convertendo colunas de data
             df_turnos['dt_inicio'] = pd.to_datetime(df_turnos['dt_inicio'], errors='coerce')
             df_turnos['dt_fim'] = pd.to_datetime(df_turnos['dt_fim'], errors='coerce')
-            df_avulsa['dt_monitoria'] = pd.to_datetime(df_avulsa['dt_monitoria'], errors='coerce')
+            df_avulsa['dt_inicio_serv'] = pd.to_datetime(df_avulsa['dt_inicio_serv'], errors='coerce')
+
+            # Removendo valores NaN
+            df_turnos = df_turnos.dropna(subset=['dt_inicio', 'dt_fim'])
+            df_avulsa = df_avulsa.dropna(subset=['dt_inicio_serv'])
 
             # Extraindo os últimos caracteres da coluna 'equipe_real'
             df_avulsa['equipe_real'] = df_avulsa['equipe_real'].astype(str).str[:6]
@@ -113,6 +116,10 @@ def connect_to_mariadb():
             df_turnos['relacionamento'] = df_turnos['num_operacional'].astype(str)
             df_avulsa['relacionamento'] = df_avulsa['equipe_real'].astype(str)
 
+            # Filtrando os dados para anos a partir de 2024
+            df_turnos = df_turnos[df_turnos['dt_inicio'].dt.year >= 2024]
+            df_avulsa = df_avulsa[df_avulsa['dt_inicio_serv'].dt.year >= 2024]
+
             return df_turnos, df_avulsa
 
     except Error as e:
@@ -124,7 +131,6 @@ def connect_to_mariadb():
             connection.close()
             st.info("Conexão encerrada.")
 
-
 # Chamando a função
 df_turnos, df_avulsa = connect_to_mariadb()
 
@@ -135,15 +141,18 @@ if df_turnos is not None and df_avulsa is not None:
 
     # Filtro de Ano
     anos = df_turnos['dt_inicio'].dt.year.unique()
-    anos_avulsa = df_avulsa['dt_monitoria'].dt.year.unique()
+    anos_avulsa = df_avulsa['dt_inicio_serv'].dt.year.unique()
     anos_combined = sorted(set(anos) | set(anos_avulsa))
+
+    # Filtrando apenas anos a partir de 2024
+    anos_combined = [ano for ano in anos_combined if ano >= 2024]
 
     ano_selecionado = st.sidebar.selectbox("Selecione o Ano:", anos_combined)
 
     # Filtro de Meses com dados disponíveis
     meses_com_dados_turnos = df_turnos[df_turnos['dt_inicio'].dt.year == ano_selecionado]['dt_inicio'].dt.month.unique()
-    meses_com_dados_avulsa = df_avulsa[df_avulsa['dt_monitoria'].dt.year == ano_selecionado][
-        'dt_monitoria'].dt.month.unique()
+    meses_com_dados_avulsa = df_avulsa[df_avulsa['dt_inicio_serv'].dt.year == ano_selecionado][
+        'dt_inicio_serv'].dt.month.unique()
 
     # Unindo os meses de ambos os DataFrames e mantendo apenas os meses com dados
     meses_com_dados = sorted(set(meses_com_dados_turnos) | set(meses_com_dados_avulsa))
@@ -197,8 +206,8 @@ if df_turnos is not None and df_avulsa is not None:
     # Filtrando a base de monitoria com base no relacionamento com a base de turnos
     equipes_filtradas = df_turnos_filtrado['num_operacional'].unique()
     df_avulsa_filtrado = df_avulsa[(
-                                           df_avulsa['dt_monitoria'].dt.year == ano_selecionado) &
-                                   (df_avulsa['dt_monitoria'].dt.month.isin(meses_selecionados)) &
+                                           df_avulsa['dt_inicio_serv'].dt.year == ano_selecionado) &
+                                   (df_avulsa['dt_inicio_serv'].dt.month.isin(meses_selecionados)) &
                                    (df_avulsa['unidade'].isin(unidades_selecionadas)) &
                                    (df_avulsa['equipe_real'].isin(equipes_filtradas))
                                    ]
@@ -277,6 +286,8 @@ if df_turnos is not None and df_avulsa is not None:
         # SEPARADOR
     st.markdown("<hr>", unsafe_allow_html=True)
 
+
+
     ###########################################   graficos de rosca informativos principais ##############################################################
 
     import plotly.graph_objects as go
@@ -288,9 +299,10 @@ if df_turnos is not None and df_avulsa is not None:
     import plotly.graph_objects as go
     import streamlit as st
 
+
     # Gráfico para a coluna 1: % EQUIPES QUE FILMARAM A ATIVIDADE
     fig1 = go.Figure(data=[go.Pie(
-        labels=['Gravou Atividade', 'Não Gravou Atividade'],
+        labels=['Atividades Filmadas', 'Atividades Não Filmadas'],
         values=[total_gravou_sim_total, total_gravou_nao_total],
         hole=0.6,
         marker=dict(colors=['#27AE60', '#E74C3C']),
@@ -298,83 +310,74 @@ if df_turnos is not None and df_avulsa is not None:
         textfont=dict(size=18, color="white")  # Ajuste do tamanho e cor do texto
     )])
 
+    # Adicionando o número total de equipes junto com a porcentagem no centro do gráfico
     fig1.update_layout(
-        title='% EQUIPES QUE FILMARAM A ATIVIDADE',
+        title='ADERÊNCIA FILMAGENS',
         title_x=0.5,
         annotations=[dict(
-            text=f"{porcentagem_gravou_sim:.2f}%",
+            text=f"{porcentagem_gravou_sim:.2f}%<br><span style='font-size:16px'>Total: {total_equipes}</span>",
             x=0.5, y=0.5, font_size=24, showarrow=False, font_color="white"
         )],
         template="plotly_dark",
     )
 
-    import plotly.graph_objects as go
-    import streamlit as st
-
-    # Gráfico para a coluna 1: % EQUIPES QUE FILMARAM A ATIVIDADE
-    fig1 = go.Figure(data=[go.Pie(
-        labels=['Gravou Atividade', 'Não Gravou Atividade'],
-        values=[total_gravou_sim_total, total_gravou_nao_total],
-        hole=0.6,
-        marker=dict(colors=['#27AE60', '#E74C3C']),
-        textinfo='value',
-        textfont=dict(size=18, color="white")  # Ajuste do tamanho e cor do texto
-    )])
-
-    fig1.update_layout(
-        title='% EQUIPES QUE FILMARAM A ATIVIDADE',
-        title_x=0.5,
-        annotations=[dict(
-            text=f"{porcentagem_gravou_sim:.2f}%",
-            x=0.5, y=0.5, font_size=24, showarrow=False, font_color="white"
-        )],
-        template="plotly_dark",
-    )
-
+    # Exibir no Streamlit
     with col1:
+
         st.plotly_chart(fig1)
 
-        # Gráfico 1: % EQUIPES QUE ABRIAM TURNOS POR EQUIPES ANALISADAS
-        fig1 = go.Figure(data=[go.Pie(
-            labels=['Equipes que Abriram Turnos', 'Equipes Monitoradas'],
-            values=[total_equipes_distintas_turnos, total_equipes_distintas],
+        # Calculando equipes que não foram monitoradas
+        equipes_nao_monitoradas = total_equipes_distintas_turnos - total_equipes_distintas
+
+        # Criando o gráfico de rosca atualizado
+        fig2 = go.Figure(data=[go.Pie(
+            labels=['Equipes Analisadas', 'Equipes Não Analisadas'],
+            values=[total_equipes_distintas, equipes_nao_monitoradas],
             hole=0.6,
-            marker=dict(colors=['#27AE60', '#E74C3C']),
+            marker=dict(colors=['#27AE60', '#E74C3C']),  # Verde para monitoradas, Vermelho para não monitoradas
             textinfo='value',
             textfont=dict(size=18, color="white")  # Ajuste do tamanho e cor do texto
         )])
 
-        fig1.update_layout(
-            title='% EQUIPES QUE ABRIAM TURNOS POR EQUIPES ANALISADAS',
+        # Adicionando o total no centro da rosca
+        fig2.update_layout(
+            title='ADERÊNCIA EQUIPES',
             title_x=0.5,
             annotations=[dict(
-                text=f"{porcentagem_abertura_turnos_equipes:.2f}%",
+                text=f"<b>{porcentagem_abertura_turnos_equipes:.2f}%</b><br>"
+                     f"<span style='font-size:16px'>Total: {total_equipes_distintas_turnos}</span>",
                 x=0.5, y=0.5, font_size=24, showarrow=False, font_color="white"
             )],
             template="plotly_dark",
         )
 
+        # Exibir no Streamlit na segunda coluna
         with col2:
-            st.plotly_chart(fig1)
+            st.plotly_chart(fig2)
+
+            # Calculando equipes que não foram monitoradas
+            turnos_não_analisados = total_turnos_distintos - total_equipes
 
         # Gráfico 2: % TURNOS ANALISADOS POR TURNOS ABERTOS
         fig2 = go.Figure(data=[go.Pie(
-            labels=['Turnos Abertos', 'Turnos Analisados'],
-            values=[total_turnos_distintos, total_equipes],
+            labels=['Turnos Analisados', 'Turnos Não Analisados'],#Turnos Analisados
+            values=[total_equipes, turnos_não_analisados],
             hole=0.6,
-            marker=dict(colors=['#27AE60', '#E74C3C']),
+            marker=dict(colors=['27AE60', 'E74C3C']),#E74C3C
             textinfo='value',
             textfont=dict(size=18, color="white")  # Ajuste do tamanho e cor do texto
         )])
 
         fig2.update_layout(
-            title='% TURNOS ANALISADOS POR TURNOS ABERTOS',
+
+            title='ADERÊNCIA TURNOS',
             title_x=0.5,
             annotations=[dict(
-                text=f"{porcentagem_abertura_turnos:.2f}%",
+                text=f"<b>{porcentagem_abertura_turnos:.2f}%</b><br>"
+                     f"<span style='font-size:16px'>Total: {total_turnos_distintos}</span>",
                 x=0.5, y=0.5, font_size=24, showarrow=False, font_color="white"
             )],
-            template="plotly_dark",
+            template="plotly_dark",#porcentagem_abertura_turnos
         )
 
         with col3:
@@ -386,18 +389,11 @@ if df_turnos is not None and df_avulsa is not None:
     import plotly.graph_objects as go
     import streamlit as st
 
-    st.markdown(
-        """
-        <div style="text-align: center;">
-            <h3>📊 <strong>GRAFICO DE EVOLUÇÃO MENSAL </strong></h3>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+
 
     # Garantindo que a coluna 'mes' seja criada e dados nulos sejam tratados
-    gravou_atividade_sim['mes'] = gravou_atividade_sim['dt_monitoria'].dt.month
-    gravou_atividade_nao['mes'] = gravou_atividade_nao['dt_monitoria'].dt.month
+    gravou_atividade_sim['mes'] = gravou_atividade_sim['dt_inicio_serv'].dt.month
+    gravou_atividade_nao['mes'] = gravou_atividade_nao['dt_inicio_serv'].dt.month
     gravou_atividade_sim = gravou_atividade_sim.dropna(subset=['mes'])
     gravou_atividade_nao = gravou_atividade_nao.dropna(subset=['mes'])
 
@@ -418,6 +414,15 @@ if df_turnos is not None and df_avulsa is not None:
     col1, col2 = st.columns(2)
 
     with col1:
+        st.markdown(
+            """
+            <div style="text-align: center;">
+                <h4 style="font-size:18px;"><strong>GRAFICO DE EVOLUÇÃO MENSAL</strong></h4>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
         # Criando o gráfico de barras com plotly
         fig = go.Figure()
 
@@ -447,7 +452,7 @@ if df_turnos is not None and df_avulsa is not None:
 
         # Atualizando o layout do gráfico
         fig.update_layout(
-            title='Evolução Mensal das Equipes que Gravaram vs Não Gravaram Atividade',
+            title='',
             title_x=0.5,
             xaxis_title='',  # Removendo o título do eixo X
             yaxis_title='',  # Removendo o título do eixo Y,
@@ -463,15 +468,15 @@ if df_turnos is not None and df_avulsa is not None:
         # Exibindo o gráfico no Streamlit
         st.plotly_chart(fig)
 
-    with col2:
         # SEPARADOR
         st.markdown("<hr>", unsafe_allow_html=True)
 
         with st.expander("Ver Detalhes das Equipes que Não Gravaram"):
-            st.write(gravou_atividade_nao_distinct[['unidade', 'equipe_real', 'dt_monitoria']])
+            st.write(gravou_atividade_nao_distinct[['unidade', 'equipe_real', 'dt_inicio_serv']])
 
         with st.expander("Ver Detalhes das Equipes que Gravaram"):
-            st.write(gravou_atividade_sim_distinct[['unidade', 'equipe_real', 'dt_monitoria', 'monitor', 'supervisor']])
+            st.write(
+                gravou_atividade_sim_distinct[['unidade', 'equipe_real', 'dt_inicio_serv', 'monitor', 'supervisor']])
 
         # SEPARADOR
         st.markdown("<hr>", unsafe_allow_html=True)
@@ -482,12 +487,73 @@ if df_turnos is not None and df_avulsa is not None:
         # SEPARADOR
     st.markdown("<hr>", unsafe_allow_html=True)
 
+
+
+    with col2:
+
+        st.markdown(
+            """
+            <div style="text-align: center;">
+                <h4 style="font-size:18px;"><strong>EQUIPES ANALISADAS / NÃO ANALISADAS</strong></h4>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # Supondo que df_avulsa_filtrado e df_turnos_filtrado já estejam definidos
+        equipes_em_ambas = set(df_avulsa_filtrado['equipe_real']).intersection(
+            set(df_turnos_filtrado['num_operacional'])
+        )
+        equipes_apenas_num_operacional = set(df_turnos_filtrado['num_operacional']).difference(
+            set(df_avulsa_filtrado['equipe_real'])
+        )
+
+        df_comparativo = pd.DataFrame(
+            [{'Equipe': equipe, 'Status': 'Analisada'} for equipe in equipes_em_ambas] +
+            [{'Equipe': equipe, 'Status': 'Pendente de Análise'} for equipe in equipes_apenas_num_operacional]
+        )
+
+        # Calcular os valores de "Analisadas" e "Pendentes de Análise"
+        analisadas = df_comparativo[df_comparativo['Status'] == 'Analisada'].shape[0]
+        pendentes = df_comparativo[df_comparativo['Status'] == 'Pendente de Análise'].shape[0]
+
+        # Labels e Parents para o gráfico de Sunburst
+        labels = ['Equipes', 'Analisada', 'Pendente de Análise'] + list(df_comparativo['Equipe'])
+        parents = ['', 'Equipes', 'Equipes'] + list(df_comparativo['Status'])
+
+        # Cores para o gráfico de Sunburst
+        colors = ['#2E86C1', '#27AE60', '#E74C3C'] + ['#0a142d'] * len(df_comparativo)
+
+        # Criar o gráfico de Sunburst
+        fig = go.Figure(go.Sunburst(
+            labels=labels,
+            parents=parents,
+            values=[analisadas + pendentes, analisadas, pendentes] + [1] * len(df_comparativo),
+            branchvalues='total',
+            marker=dict(colors=colors),
+            textfont=dict(color='white', size=14)
+        ))
+
+        # Configurar o layout do gráfico
+        fig.update_layout(
+            title='',
+            template="plotly_dark",
+            width=850,
+            height=650,
+        )
+
+        # Exibir o gráfico no Streamlit
+        st.plotly_chart(fig)
+
     ################################################################################################################
 
     ########################################  DE EVOLUÇÃO MENSAL ############################################
 
 
+
     ##############################################################################################################################
+
+
 ################################################# GRAFICOS DE EVOLUÇÃO DAS EQUIPES ##############################################
     # Organizando os gráficos em duas colunas
     col1, col2, col3 = st.columns(3)
@@ -498,8 +564,14 @@ if df_turnos is not None and df_avulsa is not None:
     import streamlit as st
 
     with col1:
-        st.markdown("<h2 style='text-align: center; font-size: 26px; color: #e7e7ec;'>Porcentagem por Equipes</h2>",
-                    unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div style="text-align: center;">
+                <h4 style="font-size:18px;"><strong>% DE ATIVIDADES FILMADAS POR EQUIPES</strong></h4>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
         # Calculando as porcentagens por equipe
         equipes_porcentagem = df_avulsa_filtrado.groupby(['equipe_real', 'gravou_atividade']).size().unstack(
@@ -535,7 +607,7 @@ if df_turnos is not None and df_avulsa is not None:
         ))
 
         fig.update_layout(
-            title='Porcentagem de Atividades Gravadas por Equipe',
+            title='',
             title_x=0.5,
 
             xaxis_title='',  # Removendo o título do eixo X
@@ -552,8 +624,13 @@ if df_turnos is not None and df_avulsa is not None:
 
     with col2:
         st.markdown(
-            "<h2 style='text-align: center; font-size: 26px; color: #e7e7ec;'>Quantidade de Registros por Equipe</h2>",
-            unsafe_allow_html=True)
+            """
+            <div style="text-align: center;">
+                <h4 style="font-size:18px;"><strong>QUANTIDADE DE EQUIPES ANALISADAS</strong></h4>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
         # Calculando a quantidade de registros por equipe
         equipes_quantidade = df_avulsa_filtrado.groupby(['equipe_real', 'gravou_atividade']).size().unstack(
@@ -588,7 +665,7 @@ if df_turnos is not None and df_avulsa is not None:
         ))
 
         fig2.update_layout(
-            title='Porcentagem de Atividades Gravadas por Equipe',
+            title='',
             title_x=0.5,  # Centraliza o título horizontalmente
             xaxis_title='',  # Removendo o título do eixo X
             yaxis_title='',  # Removendo o título do eixo Y
@@ -603,11 +680,18 @@ if df_turnos is not None and df_avulsa is not None:
         st.plotly_chart(fig2)
 
     with col3:
-        st.markdown("<h3 style='text-align: center;'>Porcentagem de Gravação por Equipe</h3>", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div style="text-align: center;">
+                <h4 style="font-size:18px;"><strong> ADERÊNCIA DE ATIVIDADES ANALISADAS POR SEMANA</strong></h4>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
         # Cálculos para a tabela
-        gravou_atividade_sim['semana'] = gravou_atividade_sim['dt_monitoria'].dt.isocalendar().week
-        gravou_atividade_nao['semana'] = gravou_atividade_nao['dt_monitoria'].dt.isocalendar().week
+        gravou_atividade_sim['semana'] = gravou_atividade_sim['dt_inicio_serv'].dt.isocalendar().week
+        gravou_atividade_nao['semana'] = gravou_atividade_nao['dt_inicio_serv'].dt.isocalendar().week
 
         gravou_atividade_sim = gravou_atividade_sim.dropna(subset=['semana'])
         gravou_atividade_nao = gravou_atividade_nao.dropna(subset=['semana'])
@@ -621,13 +705,20 @@ if df_turnos is not None and df_avulsa is not None:
         equipes_porcentagem = (gravou_atividade_sim_weekly / total_equipes_weekly) * 100
         equipes_porcentagem = equipes_porcentagem.fillna(0)
 
+
+
         # Formatando a tabela para mostrar as porcentagens com "%"
         equipes_porcentagem_formatada = equipes_porcentagem.applymap(lambda x: f"{int(x)}%")
         tabela_porcentagem = equipes_porcentagem_formatada.T
 
-        # A primeira linha para a tabela precisa ser o nome das colunas (semana)
-        semanas = tabela_porcentagem.columns.tolist()
-        equipes = tabela_porcentagem.index.tolist()
+        # Calcular a média de cada equipe (linha) ao longo das semanas
+        # Remover as porcentagens antes de calcular a média
+        tabela_porcentagem['Média'] = tabela_porcentagem.apply(
+            lambda x: f"{int(x.str.replace('%', '').astype(float).mean())}%", axis=1
+        )
+
+        # Renomear a coluna para "Equipes"
+        tabela_porcentagem.index.name = 'Equipes'
 
 
         # Função para aplicar a cor de fundo dependendo da porcentagem
@@ -643,6 +734,7 @@ if df_turnos is not None and df_avulsa is not None:
             return 'background-color: white; color: black'
 
 
+        # Aplicando o estilo para a tabela
         tabela_porcentagem_style = tabela_porcentagem.style.applymap(estilo_tabela).set_table_styles(
             [{'selector': 'thead th',
               'props': [('background-color', '#f5f5f5'), ('font-weight', 'bold'), ('font-size', '16px')]},
@@ -655,12 +747,12 @@ if df_turnos is not None and df_avulsa is not None:
         # Exibindo a tabela com o estilo gráfico no Streamlit
         st.dataframe(tabela_porcentagem_style, use_container_width=True)
 
-     ###############################################################detalhe equipes#################################################
+    ###############################################################detalhe equipes#################################################
 
     # Criando a tabela pivotada e formatada no estilo solicitado
     # Adicionando uma coluna de semana ao DataFrame
-    gravou_atividade_sim['semana'] = gravou_atividade_sim['dt_monitoria'].dt.isocalendar().week
-    gravou_atividade_nao['semana'] = gravou_atividade_nao['dt_monitoria'].dt.isocalendar().week
+    gravou_atividade_sim['semana'] = gravou_atividade_sim['dt_inicio_serv'].dt.isocalendar().week
+    gravou_atividade_nao['semana'] = gravou_atividade_nao['dt_inicio_serv'].dt.isocalendar().week
 
     # Removendo qualquer linha onde a semana seja nula ou inválida
     gravou_atividade_sim = gravou_atividade_sim.dropna(subset=['semana'])
@@ -694,6 +786,15 @@ if df_turnos is not None and df_avulsa is not None:
 
     # SEPARADOR
     st.markdown("<hr>", unsafe_allow_html=True)
+
+    st.markdown(
+        """
+        <div style="text-align: center;">
+            <h3> <strong> DETALHE % EVOLUÇÃO DAS EQUIPES POR SEMANA</strong></h3>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     # Dividindo em três colunas para exibição no Streamlit
     col1, col2, col3 = st.columns(3)
