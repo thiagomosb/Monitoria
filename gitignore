@@ -1,0 +1,3 @@
+git add .streamlit/config.toml
+git commit -m "Adicionando config.toml para Streamlit"
+git push origin main
